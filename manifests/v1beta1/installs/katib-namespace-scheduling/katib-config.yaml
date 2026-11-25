@@ -1,0 +1,51 @@
+---
+# Example Katib config fragment showing namespace-wide trial concurrency
+# budgets. Merge the `namespaceScheduling` block into an existing katib-config
+# ConfigMap (key: katib-config.yaml). All fields are optional: when a namespace
+# is absent or the ConfigMap cannot be read, the experiment controller applies a
+# conservative default running-trial limit instead of unlimited concurrency.
+apiVersion: config.kubeflow.org/v1beta1
+kind: KatibConfig
+init:
+  controller:
+    # Namespace-level concurrency budgets. The controller never exceeds the
+    # smaller of this namespace limit and the experiment's own
+    # parallelTrialCount (optionally narrowed by its share annotation).
+    namespaceScheduling:
+        # Explicit budget for one namespace.
+      - namespace: team-a
+        maxRunningTrials: 12
+        # Lower-priority experiments waiting longer than this many seconds
+        # must be admitted (starvation protection). 0 keeps the controller
+        # default.
+        starvationThresholdSeconds: 120
+        # A borrowed idle slot must be yielded within this many seconds when
+        # the share owner needs it back. 0 keeps the default.
+        borrowYieldTimeoutSeconds: 30
+        # A queued experiment whose entry exceeds this many seconds is
+        # reclaimed without admitting a trial. 0 keeps the default.
+        waitingTimeoutSeconds: 600
+      - namespace: team-b
+        maxRunningTrials: 8
+      # An empty namespace acts as the fallback budget for namespaces without
+      # an explicit entry.
+      - namespace: ""
+        maxRunningTrials: 3
+#
+# Per-experiment opt-in annotations (set on the Experiment object, not here):
+#
+#   scheduler.katib.kubeflow.org/priority: "10"
+#       Integer admission priority; higher values are admitted first when the
+#       namespace budget is exhausted. Same priority falls back to submission
+#       time, then experiment name, so the order is always deterministic.
+#
+#   scheduler.katib.kubeflow.org/share: "2"
+#       Per-experiment cap on namespace budget consumption, never above the
+#       experiment's parallelTrialCount. Unused share can be lent to other
+#       experiments and reclaimed when the owner needs it.
+#
+#   scheduler.katib.kubeflow.org/deduplicate-trials: "true"
+#       Opt-in merge of identical parameter assignments. Trials in the same
+#       experiment with equal parameter values (regardless of key order) count
+#       as one effective trial; later duplicates consume no slot and are not
+#       counted again. Defaults to false to preserve legacy behavior.

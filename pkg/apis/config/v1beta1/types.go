@@ -80,6 +80,32 @@ type ControllerConfig struct {
 	// LeaderElectionID is the ID for leader election.
 	// Defaults to '3fbc96e9.katib.kubeflow.org'.
 	LeaderElectionID string `json:"leaderElectionID,omitempty"`
+
+	// NamespaceScheduling holds namespace-wide concurrency budgets for trial
+	// scheduling. When a namespace is absent or unreadable, the controller
+	// applies a conservative default instead of unlimited concurrency.
+	NamespaceScheduling []NamespaceSchedulingConfig `json:"namespaceScheduling,omitempty"`
+}
+
+// NamespaceSchedulingConfig configures the trial concurrency budget for one
+// namespace. The semantics are additive to the per-experiment
+// ParallelTrialCount, which keeps its existing meaning and default.
+type NamespaceSchedulingConfig struct {
+	// Namespace the budget applies to. The empty name acts as the fallback
+	// budget for namespaces without an explicit entry.
+	Namespace string `json:"namespace,omitempty"`
+	// MaxRunningTrials is the namespace-wide upper bound on pending plus running
+	// trials across all experiments in the namespace.
+	MaxRunningTrials int32 `json:"maxRunningTrials,omitempty"`
+	// StarvationThresholdSeconds bounds how long a lower priority experiment may
+	// wait before it must be admitted. Zero keeps the controller default.
+	StarvationThresholdSeconds int32 `json:"starvationThresholdSeconds,omitempty"`
+	// BorrowYieldTimeoutSeconds bounds how long a borrowing experiment may keep
+	// an idle slot that the share owner needs back. Zero keeps the default.
+	BorrowYieldTimeoutSeconds int32 `json:"borrowYieldTimeoutSeconds,omitempty"`
+	// WaitingTimeoutSeconds bounds how long an experiment may stay queued before
+	// its waiting entry is reclaimed. Zero keeps the default.
+	WaitingTimeoutSeconds int32 `json:"waitingTimeoutSeconds,omitempty"`
 }
 
 // CertGeneratorConfig is the certGenerator structure in Katib config.

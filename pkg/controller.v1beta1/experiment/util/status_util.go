@@ -31,6 +31,16 @@ import (
 
 var log = logf.Log.WithName("experiment-status-util")
 
+// CompletedTrialCount returns the number of trials in a terminal condition using
+// one shared definition across status summary and scheduling. Early stopped and
+// metrics-unavailable trials count as completed, so the completion accounting in
+// ReconcileTrials and the experiment status summary can never diverge.
+func CompletedTrialCount(status experimentsv1beta1.ExperimentStatus) int32 {
+	return status.TrialsSucceeded + status.TrialsFailed +
+		status.TrialsKilled + status.TrialsEarlyStopped +
+		status.TrialMetricsUnavailable
+}
+
 const (
 	ExperimentCreatedReason              = "ExperimentCreated"
 	ExperimentRunningReason              = "ExperimentRunning"
@@ -73,6 +83,24 @@ func updateTrialsSummary(instance *experimentsv1beta1.Experiment, trials *trials
 	}
 	objectiveType := instance.Spec.Objective.Type
 
+	// A completed trial that ran to its natural end (Succeeded) provides a full
+	// observation. When at least one such trial carries an objective metric,
+	// truncated early-stopped observations must never win the best-trial
+	// comparison or trigger goal reachment.
+	fullObservationExists := false
+	for index := range trials.Items {
+		trial := &trials.Items[index]
+		if !trial.IsSucceeded() {
+			continue
+		}
+		if value := getObjectiveMetricValue(*trial); value != consts.UnavailableMetricValue {
+			if _, err := strconv.ParseFloat(value, 64); err == nil {
+				fullObservationExists = true
+				break
+			}
+		}
+	}
+
 	for index, trial := range trials.Items {
 		sts.Trials++
 		if trial.IsKilled() {
@@ -89,6 +117,14 @@ func updateTrialsSummary(instance *experimentsv1beta1.Experiment, trials *trials
 			sts.MetricsUnavailableTrialList = append(sts.MetricsUnavailableTrialList, trial.Name)
 		} else {
 			sts.PendingTrialList = append(sts.PendingTrialList, trial.Name)
+		}
+
+		// Early-stopped trials only keep the metrics produced up to their
+		// truncation point. They are eligible for the best-trial comparison only
+		// when no fully completed trial is available, and they never satisfy the
+		// objective goal on a partial observation.
+		if fullObservationExists && trial.IsEarlyStopped() {
+			continue
 		}
 
 		objectiveMetricValueStr := getObjectiveMetricValue(trial)
@@ -114,7 +150,8 @@ func updateTrialsSummary(instance *experimentsv1beta1.Experiment, trials *trials
 				bestTrialValue = objectiveMetricValue
 				bestTrialIndex = index
 			}
-			if instance.Spec.Objective.Goal != nil && bestTrialValue <= objectiveValueGoal {
+			if instance.Spec.Objective.Goal != nil && bestTrialValue <= objectiveValueGoal &&
+				!trial.IsEarlyStopped() {
 				isObjectiveGoalReached = true
 			}
 		} else if objectiveType == commonv1beta1.ObjectiveTypeMaximize {
@@ -122,7 +159,8 @@ func updateTrialsSummary(instance *experimentsv1beta1.Experiment, trials *trials
 				bestTrialValue = objectiveMetricValue
 				bestTrialIndex = index
 			}
-			if instance.Spec.Objective.Goal != nil && bestTrialValue >= objectiveValueGoal {
+			if instance.Spec.Objective.Goal != nil && bestTrialValue >= objectiveValueGoal &&
+				!trial.IsEarlyStopped() {
 				isObjectiveGoalReached = true
 			}
 		}
@@ -186,8 +224,7 @@ func getObjectiveMetricValue(trial trialsv1beta1.Trial) string {
 // UpdateExperimentStatusCondition updates the experiment status.
 func UpdateExperimentStatusCondition(collector *ExperimentsCollector, instance *experimentsv1beta1.Experiment, isObjectiveGoalReached bool, getSuggestionDone bool) {
 	logger := log.WithValues("Experiment", types.NamespacedName{Name: instance.GetName(), Namespace: instance.GetNamespace()})
-	completedTrialsCount := instance.Status.TrialsSucceeded + instance.Status.TrialsFailed +
-		instance.Status.TrialsKilled + instance.Status.TrialsEarlyStopped + instance.Status.TrialMetricsUnavailable
+	completedTrialsCount := CompletedTrialCount(instance.Status)
 	failedTrialsCount := instance.Status.TrialsFailed + instance.Status.TrialMetricsUnavailable
 	activeTrialsCount := instance.Status.TrialsPending + instance.Status.TrialsRunning
 	now := metav1.Now()
